@@ -1,5 +1,5 @@
 
-### **Chapter 2: Predeclared Types and Declarations**
+# **Chapter 2: Predeclared Types and Declarations**
 
 Chapter 2 introduces Go’s built-in types and explores how to declare and use variables in an idiomatic way. The main goal is to write clear and expressive code that communicates your intentions effectively.
 
