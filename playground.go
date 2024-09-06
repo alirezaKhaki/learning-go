@@ -30,5 +30,10 @@ func main() {
 	o := Outer{
 		Inner: Inner{A: 10},
 	}
+
+	type ITest interface{}
+	var test ITest = 5
+	change, ok := test.(string)
+	fmt.Println(change, ok)
 	fmt.Println(o.Double()) // Output: "Inner: 20"
 }
