@@ -2,38 +2,17 @@ package main
 
 import "fmt"
 
-type Inner struct {
-	A int
+type Integer interface {
+	int | int8 | int16 | int32 | int64 |
+		uint | uint8 | uint16 | uint32 | uint64
 }
 
-func (i Inner) IntPrinter(val int) string {
-	return fmt.Sprintf("Inner: %d", val)
-}
-
-func (i Inner) Double() string {
-	return i.IntPrinter(i.A * 2) // Calls Inner's IntPrinter method
-}
-
-type Outer struct {
-	Inner
-}
-
-func (o Outer) IntPrinter(val int) string {
-	return fmt.Sprintf("Outer: %d", val)
-}
-
-func (o Outer) Double() string {
-	return o.IntPrinter(o.A * 2) // Calls Inner's IntPrinter method
+func PlusOneThousand[T Integer](in T, out T) T {
+	return in + out
 }
 
 func main() {
-	o := Outer{
-		Inner: Inner{A: 10},
-	}
-
-	type ITest interface{}
-	var test ITest = 5
-	change, ok := test.(string)
-	fmt.Println(change, ok)
-	fmt.Println(o.Double()) // Output: "Inner: 20"
+	var test int32 = 100
+	a := PlusOneThousand(test, 100000000)
+	fmt.Println(a)
 }
