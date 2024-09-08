@@ -1,18 +1,22 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
 
-type Integer interface {
-	int | int8 | int16 | int32 | int64 |
-		uint | uint8 | uint16 | uint32 | uint64
-}
+	"github.com/cockroachdb/errors"
+)
 
-func PlusOneThousand[T Integer](in T, out T) T {
-	return in + out
+// A function that returns an error
+func doSomething() error {
+	return errors.New("something went wrong")
 }
 
 func main() {
-	var test int32 = 100
-	a := PlusOneThousand(test, 100000000)
-	fmt.Println(a)
+	// Call the function and capture the error
+	err := doSomething()
+
+	if err != nil {
+		// Print the error with the stack trace
+		fmt.Printf("%+v\n", err)
+	}
 }
