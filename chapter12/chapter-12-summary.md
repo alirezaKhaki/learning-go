@@ -947,3 +947,1290 @@ func main() {
 3. **Close channels**: Ensure that channels are closed properly to avoid blocking readers and leaking goroutines.
 
 By managing goroutine lifecycles carefully and using `done` channels, you can avoid goroutine leaks and improve the efficiency and reliability of your Go programs.
+
+---
+
+## Use the Context to Terminate Goroutines
+
+### Using Context to Prevent Goroutine Leaks
+
+A common way to prevent **goroutine leaks** in Go is by using the **`context`** package. The `context` package provides a mechanism for canceling operations or signaling goroutines to stop their work when they're no longer needed. This helps ensure that goroutines exit cleanly instead of lingering and consuming resources.
+
+### Example: Solving Goroutine Leaks with Context
+
+Let’s look at the **`countTo`** function, which generates numbers and sends them through a channel. We modify it to use `context.Context` to prevent goroutine leaks.
+
+#### Original Issue:
+
+If the `countTo` goroutine continues running when you break out of the loop in `main`, the goroutine remains blocked, leading to a goroutine leak. The solution is to use **context cancellation** to signal the goroutine to stop when the loop exits early.
+
+### Updated `countTo` Function Using Context
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+)
+
+func countTo(ctx context.Context, max int) <-chan int {
+    ch := make(chan int)
+    go func() {
+        defer close(ch)
+        for i := 0; i < max; i++ {
+            select {
+            case <-ctx.Done():  // Stop goroutine if context is canceled
+                return
+            case ch <- i:  // Send values to the channel
+            }
+        }
+    }()
+    return ch
+}
+
+func main() {
+    // Create a cancellable context
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()  // Ensure context is canceled when main exits
+
+    ch := countTo(ctx, 10)
+
+    // Read values from the channel and exit early
+    for i := range ch {
+        if i > 5 {
+            break  // Exit loop early
+        }
+        fmt.Println(i)
+    }
+}
+```
+
+### Explanation:
+
+1. **Context**:
+
+   - `countTo` now accepts a `context.Context` parameter, which is used to cancel the goroutine if needed.
+   - Inside the goroutine, a `select` statement is used to either send values to the channel or stop execution if the context is canceled.
+
+2. **`ctx.Done()`**:
+
+   - The `Done()` method of the `context.Context` returns a channel that is closed when the context is canceled.
+   - Inside the `select` statement, if the `ctx.Done()` channel is closed, the goroutine exits by returning.
+
+3. **Context Creation**:
+
+   - In `main`, `context.WithCancel` is used to create a context that can be canceled. A `cancel()` function is also returned.
+   - The `cancel()` function is deferred, ensuring the context is canceled when `main` finishes. This sends a signal to any goroutines using this context to stop.
+
+4. **Breaking the Loop**:
+   - If the loop in `main` exits early (e.g., when `i > 5`), the context is automatically canceled by calling `defer cancel()`.
+   - This triggers the `ctx.Done()` channel in the goroutine, causing it to exit cleanly.
+
+### Why This Pattern Works
+
+Using `context.Context` to cancel goroutines is a standard and effective pattern in Go. Here’s why:
+
+- **Clean termination**: When the context is canceled, all goroutines that rely on it stop immediately. This prevents leaks and ensures that resources are freed.
+- **Controlled exit**: The caller (in this case, `main`) can control when the goroutine should stop, even from an earlier point in the call stack.
+- **Standardized interface**: The `context` package provides a consistent and simple way to manage cancellation and timeouts, making it a best practice in Go concurrency.
+
+### Summary of Context-Based Goroutine Management
+
+- **Why use context?** Contexts are a powerful way to signal goroutines to stop when they are no longer needed. This prevents memory leaks and ensures that goroutines exit cleanly.
+- **`context.WithCancel()`**: This creates a context with a cancellation function that can be used to stop one or more goroutines.
+- **`ctx.Done()`**: Inside a goroutine, use `select` with `ctx.Done()` to check if the context has been canceled. When the context is canceled, the `Done()` channel is closed, and the goroutine can stop.
+
+This pattern of using context is commonly used in Go for **cancellation**, **timeouts**, and **deadlines** in concurrent programs, ensuring clean and efficient goroutine management.
+
+---
+
+## Know When to Use Buffered and Unbuffered Channels
+
+### When to Use Buffered and Unbuffered Channels in Go
+
+Deciding when to use **buffered** versus **unbuffered** channels in Go can be tricky, but understanding their behavior can help you make the right choice based on your specific concurrency needs.
+
+#### **Unbuffered Channels** (Default)
+
+- **Behavior**: When you use an unbuffered channel, a **write** operation blocks until a corresponding **read** operation is ready to receive the value, and vice versa.
+- **Usage**: Ideal when you want tight synchronization between goroutines. One goroutine waits for another to process the data before continuing, much like a baton being passed in a relay race.
+
+  **Example**:
+
+  ```go
+  ch := make(chan int)
+
+  go func() {
+      ch <- 5  // Blocks until a reader is ready
+  }()
+
+  val := <-ch  // Unblocks the sender, receives the value
+  fmt.Println(val)
+  ```
+
+#### **Buffered Channels**
+
+- **Behavior**: A buffered channel has a fixed capacity and can hold multiple values. Writes to a buffered channel don’t block until the buffer is full. Similarly, reads don’t block until the buffer is empty.
+- **Usage**: Buffered channels are useful when you:
+  1. **Know how many goroutines will be writing/reading**: For example, when you have a fixed number of tasks, and you don’t want to launch more goroutines than necessary.
+  2. **Want to limit the number of concurrent goroutines**: Buffered channels allow you to control the flow of data and prevent the system from being overwhelmed by too many concurrent tasks.
+  3. **Want to avoid blocking**: If you want producers to write without waiting for consumers, use a buffered channel with enough space.
+
+#### **Choosing When to Use Buffered Channels**
+
+Buffered channels are particularly helpful in scenarios where you need to:
+
+1. **Gather results from multiple goroutines**: If you have a known number of tasks, you can use a buffered channel to collect results and ensure the system doesn’t block while waiting for reads.
+2. **Limit concurrent processing**: Buffered channels can act as a natural throttle, preventing too many goroutines from being launched or too many tasks from queuing up.
+
+### Example: Using Buffered Channels to Collect Results from Goroutines
+
+Let’s consider an example where you launch 10 goroutines, and each goroutine processes a value from an input channel and writes the result to a buffered channel. You know exactly how many goroutines are being launched, and you want each to finish its work and send its result back to a buffered channel without blocking.
+
+```go
+package main
+
+import (
+	"fmt"
+)
+
+// Simulate some work
+func process(v int) int {
+	return v * 2
+}
+
+func processChannel(ch chan int) []int {
+	const conc = 10
+	results := make(chan int, conc)  // Buffered channel to collect results
+
+	// Launch 10 goroutines to process the input
+	for i := 0; i < conc; i++ {
+		go func() {
+			v := <-ch          // Read from input channel
+			results <- process(v)  // Send result to buffered channel
+		}()
+	}
+
+	var out []int
+	// Collect all results from the buffered channel
+	for i := 0; i < conc; i++ {
+		out = append(out, <-results)  // Read from results
+	}
+	return out
+}
+
+func main() {
+	ch := make(chan int, 10)
+
+	// Send 10 values to the channel
+	for i := 1; i <= 10; i++ {
+		ch <- i
+	}
+	close(ch)  // Close the channel to signal no more input
+
+	// Process the input channel and get the results
+	results := processChannel(ch)
+
+	// Output results
+	fmt.Println(results)  // [2 4 6 8 10 12 14 16 18 20]
+}
+```
+
+### Explanation:
+
+1. **Buffered channel `results`**: A buffered channel with a capacity of `10` is created to store the results from the goroutines. This allows each goroutine to send its result to the channel without blocking.
+2. **Processing goroutines**: 10 goroutines are launched, and each reads a value from the `ch` channel, processes it, and writes the result to the `results` buffered channel.
+3. **Gathering results**: The main goroutine collects all results by reading from the buffered `results` channel and appending them to a slice.
+
+### Key Points About Buffered Channels:
+
+1. **Blocking behavior**:
+   - Writes to a **buffered** channel only block when the buffer is full.
+   - Reads from a **buffered** channel only block when the buffer is empty.
+2. **Fixed number of goroutines**: Buffered channels are perfect for scenarios where you have a known number of goroutines. Each goroutine can write its result to the channel without waiting for a reader, as long as the buffer is not full.
+3. **Limiting work in progress**: Buffered channels are also useful when you want to control how much work is being queued up. For example, a small buffer prevents excessive queuing and forces producers to wait until consumers can process the work.
+
+### Example: Limiting the Amount of Work
+
+If you want to limit the amount of work queued up, you can use a buffered channel to buffer tasks and block additional writes when the buffer is full:
+
+```go
+func worker(ch chan int) {
+	for v := range ch {
+		fmt.Println("Processing", v)
+	}
+}
+
+func main() {
+	ch := make(chan int, 5)  // Buffered channel with a buffer size of 5
+
+	// Launch a worker goroutine to process tasks
+	go worker(ch)
+
+	// Send tasks to the buffered channel
+	for i := 1; i <= 10; i++ {
+		ch <- i  // Only 5 tasks will be queued at a time
+	}
+	close(ch)
+}
+```
+
+- In this example, only 5 tasks can be queued in the buffer. Once the buffer is full, the main goroutine blocks until the worker processes some tasks and frees up space in the channel.
+
+### When to Use Buffered Channels:
+
+1. **Fixed number of tasks**: When you know how many tasks you need to process and want to prevent blocking.
+2. **Limiting concurrent goroutines**: When you want to limit the number of goroutines or tasks being processed concurrently.
+3. **Preventing overload**: When you want to control the amount of work queued up, avoiding overwhelming your system.
+
+### Summary
+
+- **Unbuffered channels** are simple and great for tight synchronization between goroutines.
+- **Buffered channels** are more complex but useful when you know the number of goroutines, want to limit concurrency, or control the amount of work queued up.
+- Use **buffered channels** when you want to avoid blocking writes and reads in concurrent systems, but be cautious about picking the right buffer size and handling cases where the buffer is full or empty.
+
+---
+
+## Implement Backpressure
+
+### Implementing Backpressure in Go with Buffered Channels
+
+**Backpressure** is a technique used to limit the amount of work being performed in a system. By limiting the number of concurrent requests or tasks, you prevent the system from being overwhelmed. It may seem counterintuitive, but limiting the workload in a system often improves overall performance and stability, ensuring that resources are used optimally.
+
+In Go, we can implement backpressure using a **buffered channel** and a **select** statement to control the number of simultaneous tasks. Let’s break down how this works with an example.
+
+### Example: Backpressure with a Buffered Channel
+
+We will create a `PressureGauge` struct that uses a buffered channel to control the number of active requests. When the system reaches its limit, it will return an error to signal that no more capacity is available.
+
+#### Code Implementation
+
+```go
+package main
+
+import (
+	"errors"
+	"net/http"
+	"time"
+)
+
+// PressureGauge controls the number of simultaneous requests
+type PressureGauge struct {
+	ch chan struct{}  // Buffered channel to limit capacity
+}
+
+// New creates a new PressureGauge with a specified limit
+func New(limit int) *PressureGauge {
+	return &PressureGauge{
+		ch: make(chan struct{}, limit),
+	}
+}
+
+// Process handles incoming requests, respecting the backpressure limit
+func (pg *PressureGauge) Process(f func()) error {
+	select {
+	case pg.ch <- struct{}{}:  // Try to acquire a "token"
+		// Execute the function and release the token after processing
+		f()
+		<-pg.ch  // Release the "token"
+		return nil
+	default:  // No available "tokens" - system is overloaded
+		return errors.New("no more capacity")
+	}
+}
+
+func doThingThatShouldBeLimited() string {
+	time.Sleep(2 * time.Second)  // Simulate some work
+	return "done"
+}
+
+func main() {
+	// Create a new PressureGauge that limits to 10 concurrent requests
+	pg := New(10)
+
+	// Handle HTTP requests with the Process function
+	http.HandleFunc("/request", func(w http.ResponseWriter, r *http.Request) {
+		err := pg.Process(func() {
+			w.Write([]byte(doThingThatShouldBeLimited()))
+		})
+
+		// If the request exceeds the limit, respond with "Too Many Requests"
+		if err != nil {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte("Too many requests"))
+		}
+	})
+
+	// Start the HTTP server
+	http.ListenAndServe(":8080", nil)
+}
+```
+
+### How It Works:
+
+1. **`PressureGauge` struct**:
+
+   - `PressureGauge` contains a buffered channel `ch` that acts as a pool of "tokens." The buffer size determines how many concurrent tasks can be processed at the same time.
+   - Each time a task wants to be processed, it tries to write an empty struct `struct{}{}` into the channel, effectively "acquiring" a token. After the task is done, it reads from the channel, "releasing" the token.
+
+2. **`New` function**:
+
+   - This creates a new instance of `PressureGauge` with a specified limit. The `limit` controls the buffer size of the channel, which effectively limits the number of concurrent tasks.
+
+3. **`Process` method**:
+
+   - The `Process` method uses a `select` statement to either allow a task to run if there is available capacity (i.e., space in the channel buffer) or return an error if the system is overloaded.
+   - If the channel has space, it writes a token (empty struct) to the channel, executes the provided function `f`, and then reads from the channel to release the token after the task completes.
+   - If the channel buffer is full, the `default` case in the `select` is triggered, and it returns an error indicating that the system is at capacity.
+
+4. **HTTP Request Handling**:
+   - The `http.HandleFunc` listens for incoming requests to the `/request` endpoint.
+   - For each request, it uses the `Process` method of the `PressureGauge` to control the number of concurrent requests. If the system can handle the request, the function `doThingThatShouldBeLimited` is executed. If not, the server responds with an HTTP `429 Too Many Requests` status code.
+
+### Key Points:
+
+- **Buffered Channel**: The buffered channel limits the number of concurrent tasks. In this example, `PressureGauge` limits it to 10 concurrent requests. When the buffer is full, additional requests are rejected until there is capacity again.
+- **Backpressure**: By limiting the number of concurrent requests, we prevent the system from being overwhelmed, allowing it to perform efficiently even under heavy load.
+
+- **`select` with `default`**: The `select` statement is used to implement non-blocking behavior. If the buffer has space, a request can proceed. If it is full, the default case is executed, and an error is returned.
+
+### Example of How Backpressure Works:
+
+1. If there are **fewer than 10 concurrent requests**:
+
+   - Each request will successfully acquire a token from the `PressureGauge`.
+   - The request is processed, and after completion, the token is released back to the buffer.
+
+2. If there are **10 concurrent requests**:
+   - Any additional requests will trigger the `default` case in the `select` statement, causing the server to respond with an HTTP `429 Too Many Requests` status code.
+
+### Example of HTTP Server in Action:
+
+- When 10 requests are processed simultaneously, the 11th request will be rejected with a `429` error.
+
+```shell
+curl http://localhost:8080/request  # Will return "done" after 2 seconds
+curl http://localhost:8080/request  # Will return "done" after 2 seconds
+curl http://localhost:8080/request  # If 10 requests are already being processed, it returns "Too many requests"
+```
+
+### Benefits of Backpressure:
+
+- **Prevents Overload**: By limiting the number of concurrent requests, you prevent your system from being overwhelmed, which helps maintain responsiveness and stability.
+- **Graceful Failure**: When the system reaches its capacity, it can respond with a proper error (`429 Too Many Requests`), allowing clients to handle the situation accordingly (e.g., retrying later).
+- **Resource Efficiency**: By controlling the number of active requests, you avoid situations where excessive tasks overwhelm resources like CPU, memory, or network bandwidth.
+
+### Conclusion:
+
+Using **buffered channels** to implement **backpressure** is an effective way to limit the number of concurrent tasks in a Go system. This pattern ensures that your system stays responsive and stable under load by rejecting excess work and allowing only a manageable amount of work to proceed at any given time.
+
+---
+
+## Turn Off a case in a select
+
+### Handling Closed Channels with `select` in Go
+
+When dealing with multiple concurrent sources using the `select` statement, it’s important to handle closed channels properly. If a channel is closed, the `select` statement can still pick the closed channel, and it will always return the **zero value** of the channel's type. This can waste time and lead to incorrect behavior in your program.
+
+A useful technique is to **set a channel to `nil`** after detecting that it’s closed. Since reading from or writing to a `nil` channel **blocks forever**, the corresponding case in the `select` statement will be effectively disabled.
+
+### Why Set a Channel to `nil`?
+
+- When a channel is closed, it keeps returning the **zero value** for its type. This can cause unwanted reads or processing of junk values.
+- Instead of continuously reading from a closed channel, you can **set it to `nil`** so that the `select` case for that channel will no longer be executed.
+
+### Example: Combining Multiple Concurrent Sources
+
+Here’s how you can use the `select` statement to read from two channels until both are closed, and disable the cases for closed channels by setting them to `nil`:
+
+```go
+package main
+
+import (
+	"fmt"
+)
+
+func main() {
+	in := make(chan int)
+	in2 := make(chan int)
+
+	// Simulate closing the channels after sending some data
+	go func() {
+		for i := 0; i < 3; i++ {
+			in <- i
+		}
+		close(in)
+	}()
+
+	go func() {
+		for i := 10; i < 13; i++ {
+			in2 <- i
+		}
+		close(in2)
+	}()
+
+	// Read from both channels until they are closed
+	for count := 0; count < 2; {
+		select {
+		case v, ok := <-in:
+			if !ok {
+				// Channel in is closed, set to nil to disable this case
+				in = nil
+				count++
+				continue
+			}
+			fmt.Println("Received from in:", v)
+
+		case v, ok := <-in2:
+			if !ok {
+				// Channel in2 is closed, set to nil to disable this case
+				in2 = nil
+				count++
+				continue
+			}
+			fmt.Println("Received from in2:", v)
+		}
+	}
+
+	fmt.Println("Both channels are closed, exiting.")
+}
+```
+
+### Explanation:
+
+1. **Channels `in` and `in2`**: Two channels (`in` and `in2`) are used to simulate two concurrent sources of data.
+2. **Goroutines**: Two goroutines send data into the channels and then close them.
+3. **Select Statement**:
+   - The `select` statement reads from both `in` and `in2`.
+   - If a channel is closed, the `ok` variable returned by `<-ch` will be `false`.
+   - Once a channel is closed, the channel variable (`in` or `in2`) is set to `nil`, disabling that case in future iterations of the `select` loop.
+4. **Exiting the Loop**:
+   - The loop continues until both channels are closed. Once both channels are set to `nil`, the loop exits.
+
+### Output:
+
+```
+Received from in: 0
+Received from in2: 10
+Received from in: 1
+Received from in2: 11
+Received from in: 2
+Received from in2: 12
+Both channels are closed, exiting.
+```
+
+### Key Points:
+
+- **Avoid Junk Reads**: Once a channel is closed, continuously reading from it will return the zero value of the channel's type, which can cause your program to behave incorrectly.
+- **Disabling Closed Channels**: Setting a closed channel to `nil` disables the corresponding case in the `select` statement, preventing further unnecessary reads.
+- **Efficient Handling**: This pattern ensures that you handle closed channels efficiently, without wasting resources on closed channels.
+
+### Summary:
+
+When using `select` with multiple channels, be sure to handle closed channels properly. Setting a closed channel to `nil` is a clean and effective way to disable its case in the `select` statement, avoiding unnecessary processing of zero values. This technique is especially useful when you're combining data from multiple concurrent sources.
+
+---
+
+### **Let me explain the concept in a simpler way**
+
+### Problem:
+
+When you use the **`select`** statement to read from multiple channels, the Go program continues to read from channels even after they are **closed**. Once a channel is closed, it keeps returning the **zero value** for the channel's type (for example, `0` for integers). This can lead to issues, as the program continues to read from a closed channel unnecessarily.
+
+### Goal:
+
+We want the program to stop reading from a channel once it is closed. This will prevent the program from wasting time reading meaningless values from closed channels.
+
+### How It Works:
+
+- **Channels** are a way for goroutines to communicate by sending and receiving values.
+- **Closed Channels**: When a channel is closed, it stops sending new values but still returns the **zero value** (like `0` for integers) if you try to read from it.
+- **select Statement**: `select` is used to read from multiple channels simultaneously, but it doesn’t know when a channel is closed unless we handle it explicitly.
+
+### The Issue:
+
+When a channel is **closed**, the `select` statement will continue to pick the closed channel and keep returning the zero value. This is inefficient because:
+
+- The program might keep reading `0` from the closed channel.
+- It looks like the program is stuck reading from that channel.
+
+### The Solution:
+
+1. **Check if the Channel is Closed**: When reading from a channel in a `select`, Go provides a way to check if the channel is closed by using a special flag `ok`. If `ok` is `false`, it means the channel is closed.
+2. **Set the Channel to `nil`**: Once you know a channel is closed, you set it to `nil`. This **disables** the channel so the `select` statement won’t choose that channel again. A `nil` channel in Go cannot be read from or written to, so it’s like turning off that channel.
+
+### Step-by-Step Breakdown
+
+#### Example Without Proper Handling:
+
+If you don't handle closed channels properly, the program keeps reading from closed channels:
+
+```go
+package main
+
+import (
+	"fmt"
+)
+
+func main() {
+	in := make(chan int)
+	in2 := make(chan int)
+
+	go func() {
+		for i := 0; i < 3; i++ {
+			in <- i
+		}
+		close(in)
+	}()
+
+	go func() {
+		for i := 10; i < 13; i++ {
+			in2 <- i
+		}
+		close(in2)
+	}()
+
+	for {
+		select {
+		case v := <-in:
+			fmt.Println("Received from in:", v)
+		case v := <-in2:
+			fmt.Println("Received from in2:", v)
+		}
+	}
+}
+```
+
+**What Happens**:
+
+- Once `in` or `in2` is closed, the `select` will keep reading `0` from the closed channel (`in` or `in2`).
+- The program will keep running forever and print `0` for the closed channel, which isn’t useful.
+
+#### Example with Proper Handling (Setting Closed Channels to `nil`):
+
+To prevent this issue, we check if the channel is closed and disable it by setting it to `nil`:
+
+```go
+package main
+
+import (
+	"fmt"
+)
+
+func main() {
+	in := make(chan int)
+	in2 := make(chan int)
+
+	// Sending data and closing channels
+	go func() {
+		for i := 0; i < 3; i++ {
+			in <- i
+		}
+		close(in)
+	}()
+
+	go func() {
+		for i := 10; i < 13; i++ {
+			in2 <- i
+		}
+		close(in2)
+	}()
+
+	for count := 0; count < 2; {
+		select {
+		case v, ok := <-in:
+			if !ok {
+				fmt.Println("Channel in is closed")
+				in = nil // Disable the channel by setting it to nil
+				count++
+				continue
+			}
+			fmt.Println("Received from in:", v)
+
+		case v, ok := <-in2:
+			if !ok {
+				fmt.Println("Channel in2 is closed")
+				in2 = nil // Disable the channel by setting it to nil
+				count++
+				continue
+			}
+			fmt.Println("Received from in2:", v)
+		}
+	}
+
+	fmt.Println("Both channels are closed, exiting.")
+}
+```
+
+**What Happens Here**:
+
+- When we read from `in` or `in2`, we check if the channel is closed using `ok`.
+- If the channel is closed, we print `"Channel in is closed"` or `"Channel in2 is closed"` and set the channel to `nil`.
+- By setting the channel to `nil`, the `select` statement will no longer try to read from it.
+
+### Why This Works:
+
+- **Check if Closed**: The `ok` flag tells us if the channel is closed (`ok == false` means it's closed).
+- **Disable Closed Channels**: Setting the channel to `nil` ensures the program stops reading from that channel.
+- **Clean Exit**: The program exits cleanly once both channels are closed.
+
+### Summary:
+
+- **Without Handling**: The program keeps reading from closed channels and gets stuck, returning `0` for closed channels.
+- **With Proper Handling**: We check if the channel is closed using `ok`, and once it is closed, we disable the channel by setting it to `nil`, ensuring that the program stops reading from it and exits cleanly.
+
+I hope this makes the concept clearer! Let me know if you need more clarification.
+
+---
+
+## Time Out Code
+
+### Time Out Code in Go: Managing Operation Time Limits
+
+In interactive programs, you often need to ensure that certain operations finish within a specific amount of time. In Go, this is easily achievable using **concurrency** and **timeouts** with the `context` package. The following pattern demonstrates how you can manage timeouts for operations.
+
+### Time-Limited Function Pattern
+
+Here's the pattern for limiting the duration of a worker function:
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// timeLimit runs a worker function and returns an error if it times out
+func timeLimit[T any](worker func() T, limit time.Duration) (T, error) {
+	out := make(chan T, 1) // Buffered channel of size 1 to store result
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel() // Ensure the context is canceled after timeout
+
+	// Run the worker function in a goroutine
+	go func() {
+		out <- worker() // Send result to the buffered channel
+	}()
+
+	// Select between worker completion or timeout
+	select {
+	case result := <-out: // If the worker finishes in time
+		return result, nil
+	case <-ctx.Done(): // If the context times out
+		var zero T
+		return zero, errors.New("work timed out")
+	}
+}
+
+func main() {
+	// A worker function that takes 2 seconds to complete
+	worker := func() int {
+		time.Sleep(2 * time.Second)
+		return 42
+	}
+
+	// Use the timeLimit function with a 1-second timeout
+	result, err := timeLimit(worker, 1*time.Second)
+	if err != nil {
+		fmt.Println("Error:", err)
+	} else {
+		fmt.Println("Result:", result)
+	}
+}
+```
+
+### How It Works:
+
+1. **Buffered Channel**: The result of the worker function is sent to a buffered channel `out` with a size of 1. This allows the worker to send the result even if the timeout has already occurred.
+2. **Context with Timeout**: The `context.WithTimeout` function creates a context that automatically cancels itself after the given duration (`limit`). This helps manage the timeout.
+
+3. **Goroutine**: The worker function is executed in a separate goroutine, and its result is sent to the `out` channel.
+
+4. **Select Statement**:
+   - If the worker finishes in time, the result is received from the `out` channel, and it’s returned.
+   - If the timeout occurs first (via the `ctx.Done()` channel), the function returns a timeout error.
+
+### Example Output:
+
+In the `main` function, we run a worker that takes 2 seconds, but we set a timeout of 1 second:
+
+```
+Error: work timed out
+```
+
+If you adjust the timeout to 3 seconds (more than the worker's duration), the output would be:
+
+```
+Result: 42
+```
+
+### Key Points:
+
+- **Timeout Handling**: This pattern uses the `select` statement to choose between the worker completing and the context timing out.
+- **Context Management**: The `ctx.Done()` channel provides a mechanism to detect when the timeout occurs, helping to manage long-running tasks.
+- **Buffered Channel**: A buffered channel of size 1 is used to ensure that the worker goroutine can write its result even if the main function has already timed out.
+
+### Conclusion:
+
+This **timeout pattern** is commonly used in Go to manage operations that need to complete within a specific time limit. By using the `context` package, you can create a flexible and powerful system for handling long-running or potentially blocking tasks.
+
+---
+
+## Use WaitGroups
+
+### Using `sync.WaitGroup` in Go for Goroutine Synchronization
+
+In Go, if you need to wait for **multiple goroutines** to complete before proceeding, you can use a **WaitGroup** from the `sync` package. It allows you to wait for a set of goroutines to finish their work.
+
+### Basic Example of `sync.WaitGroup`
+
+Here's a simple example where three goroutines are started, and the main function waits for all of them to finish:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func doThing1() {
+	fmt.Println("Doing thing 1")
+}
+
+func doThing2() {
+	fmt.Println("Doing thing 2")
+}
+
+func doThing3() {
+	fmt.Println("Doing thing 3")
+}
+
+func main() {
+	var wg sync.WaitGroup  // Declare WaitGroup
+
+	wg.Add(3)  // Add 3 to the WaitGroup counter (for 3 goroutines)
+
+	// Start the first goroutine
+	go func() {
+		defer wg.Done()  // Call Done when finished
+		doThing1()
+	}()
+
+	// Start the second goroutine
+	go func() {
+		defer wg.Done()  // Call Done when finished
+		doThing2()
+	}()
+
+	// Start the third goroutine
+	go func() {
+		defer wg.Done()  // Call Done when finished
+		doThing3()
+	}()
+
+	wg.Wait()  // Wait for all goroutines to finish
+}
+```
+
+### Explanation:
+
+1. **WaitGroup**: A `WaitGroup` is used to wait for a collection of goroutines to finish.
+2. **`wg.Add(n)`**: This increments the counter, indicating how many goroutines you are waiting for. In this example, `wg.Add(3)` tells Go we are waiting for three goroutines.
+3. **`wg.Done()`**: Each goroutine calls `Done()` when it finishes, which decrements the counter.
+4. **`wg.Wait()`**: This blocks the main function until the `WaitGroup` counter reaches zero (i.e., when all goroutines have called `Done`).
+
+### Important Points:
+
+- You don’t need to **initialize** a `sync.WaitGroup`, just declare it (the zero value is usable).
+- The **counter** (`Add`, `Done`, and `Wait`) must be correctly managed; otherwise, your program may hang or exit early.
+
+### Real-World Example: Process Data from Channels
+
+In this more realistic example, multiple goroutines process data from a channel and send their results to another channel. The **WaitGroup** ensures that we close the output channel only when all processing is finished.
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// processAndGather launches 'num' goroutines to process data from 'in' and send results to 'out'.
+func processAndGather[T, R any](in <-chan T, processor func(T) R, num int) []R {
+	out := make(chan R, num)
+	var wg sync.WaitGroup
+	wg.Add(num)
+
+	// Launch 'num' goroutines to process data from 'in'
+	for i := 0; i < num; i++ {
+		go func() {
+			defer wg.Done()
+			for v := range in {
+				out <- processor(v)  // Process and send result to 'out'
+			}
+		}()
+	}
+
+	// Close the 'out' channel once all goroutines are done
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+
+	// Gather all results from the 'out' channel
+	var result []R
+	for v := range out {
+		result = append(result, v)
+	}
+	return result
+}
+
+func main() {
+	// Example: Squaring integers
+	in := make(chan int, 5)
+	processor := func(n int) int { return n * n }
+
+	// Sending data to 'in' channel
+	go func() {
+		for i := 1; i <= 5; i++ {
+			in <- i
+		}
+		close(in)  // Close input channel when done
+	}()
+
+	// Process and gather results
+	results := processAndGather(in, processor, 3)
+
+	// Print results
+	fmt.Println(results)  // Output: [1 4 9 16 25]
+}
+```
+
+### Explanation:
+
+1. **Input and Output Channels**: Data is read from the `in` channel, processed by multiple goroutines, and results are sent to the `out` channel.
+2. **Goroutines with `WaitGroup`**: The goroutines process data concurrently, and the `WaitGroup` ensures that the `out` channel is closed only after all goroutines are done.
+3. **Closing the `out` Channel**: After all the processing goroutines have called `wg.Done()`, the channel `out` is closed, so the `for` loop reading from `out` terminates.
+4. **Result Gathering**: All processed results are gathered into a slice and returned.
+
+### When to Use `sync.WaitGroup`:
+
+- **Multiple Goroutines**: When you have multiple goroutines and need to wait for all of them to finish before proceeding.
+- **Closing a Channel**: If multiple goroutines are writing to a channel, use a `WaitGroup` to ensure the channel is closed only once all the goroutines are done.
+
+### Conclusion:
+
+- **WaitGroup** is a powerful tool for managing goroutine synchronization when you need to wait for multiple goroutines to complete.
+- **Add** specifies how many goroutines you are waiting for, **Done** is called when a goroutine completes its work, and **Wait** blocks until all goroutines are finished.
+- It’s particularly useful when you need to clean up or close shared resources like channels once all workers have completed their tasks.
+
+This pattern is a great way to handle concurrency in Go when working with multiple goroutines.
+
+---
+
+### Run Code Exactly Once
+
+### Using `sync.Once` to Run Code Exactly Once in Go
+
+In some cases, you may want to initialize something **only once** during the lifetime of your program, especially if the initialization is slow or expensive. Go’s `sync.Once` type from the `sync` package ensures that a piece of code runs only once, no matter how many times it's called.
+
+### Basic Use of `sync.Once`
+
+Let's say you have a **slow initialization** process for a parser:
+
+```go
+type SlowComplicatedParser interface {
+	Parse(string) string
+}
+
+// Simulate slow parser initialization
+func initParser() SlowComplicatedParser {
+	// Time-consuming setup work here
+	fmt.Println("Initializing parser...")
+	return &MyParser{}
+}
+
+type MyParser struct{}
+
+func (p *MyParser) Parse(input string) string {
+	return "Parsed: " + input
+}
+```
+
+Now, let's ensure that this parser is only initialized once using `sync.Once`:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// Declare the parser and sync.Once at package level
+var parser SlowComplicatedParser
+var once sync.Once
+
+// Parse function that initializes the parser only once
+func Parse(dataToParse string) string {
+	once.Do(func() {
+		parser = initParser() // This will only run once
+	})
+	return parser.Parse(dataToParse)
+}
+
+func main() {
+	// Call Parse multiple times, but parser will be initialized only once
+	fmt.Println(Parse("data1"))
+	fmt.Println(Parse("data2"))
+}
+```
+
+### Explanation:
+
+1. **`sync.Once`**: The `once` variable of type `sync.Once` ensures that the initialization code runs exactly once, regardless of how many times `Parse` is called.
+2. **`once.Do`**: The `Do` method is where you put the code that should run only once. In this case, the `initParser` function will only be called once.
+3. **Global Variables**: `parser` and `once` are package-level variables so that they persist across multiple calls to the `Parse` function.
+
+### Output:
+
+```
+Initializing parser...
+Parsed: data1
+Parsed: data2
+```
+
+Even though `Parse` is called twice, the parser is initialized only once.
+
+### Using `sync.OnceValue` (Go 1.21+)
+
+In Go 1.21, a new helper function called `sync.OnceValue` was introduced. It simplifies the process of caching the result of a function that needs to run once. Here’s how to use it:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// Define initParser as before
+func initParser() SlowComplicatedParser {
+	fmt.Println("Initializing parser...")
+	return &MyParser{}
+}
+
+type MyParser struct{}
+
+func (p *MyParser) Parse(input string) string {
+	return "Parsed: " + input
+}
+
+// Use sync.OnceValue to create a cached version of initParser
+var initParserCached = sync.OnceValue(initParser)
+
+// Parse function that calls the cached parser initialization
+func Parse(dataToParse string) string {
+	parser := initParserCached()
+	return parser.Parse(dataToParse)
+}
+
+func main() {
+	// Call Parse multiple times, but parser will be initialized only once
+	fmt.Println(Parse("data1"))
+	fmt.Println(Parse("data2"))
+}
+```
+
+### Explanation:
+
+1. **`sync.OnceValue`**: This is a generic function that runs the `initParser` function only once and caches the result.
+2. **Cached Initialization**: After the first call, `initParserCached()` returns the cached parser, avoiding the need for any manual `sync.Once` management.
+
+### Output:
+
+```
+Initializing parser...
+Parsed: data1
+Parsed: data2
+```
+
+Just like before, the parser is initialized only once, and subsequent calls return the cached result.
+
+### Key Differences Between `sync.Once` and `sync.OnceValue`:
+
+- **`sync.Once`**: You have to manually manage the variable and the call to `once.Do()`.
+- **`sync.OnceValue`**: It simplifies the process by caching the result automatically and handling the "once" behavior for you.
+
+The difference between **`sync.Once`** and **`sync.OnceValue`** is mainly in how they manage and simplify the execution of code that should only run once.
+
+### 1. **`sync.Once`**:
+
+- **Purpose**: Ensures a block of code is executed exactly **once** in the program, regardless of how many times the function is called.
+- **Manual Management**: You have to manually manage when the code is run. This means you need to handle the global variables (e.g., a parser) separately, and use `once.Do()` to wrap the code that should only run once.
+- **Use Case**: When you need to run some initialization code that doesn't return a value or when you need to manage the object separately (e.g., handling multiple setup operations).
+
+#### Example with `sync.Once`:
+
+```go
+var parser SlowComplicatedParser
+var once sync.Once
+
+func Parse(dataToParse string) string {
+	once.Do(func() {        // The block inside Do() runs only once
+		parser = initParser()  // Initialize parser only once
+	})
+	return parser.Parse(dataToParse)
+}
+```
+
+**How It Works**:
+
+- The `once.Do()` function ensures that the `initParser()` function is called only the first time. After that, `once.Do()` does nothing and simply uses the already initialized `parser`.
+
+### 2. **`sync.OnceValue`** (Go 1.21+):
+
+- **Purpose**: Automatically caches the result of a function that returns a value. The function is executed only once, and its return value is saved (cached). All subsequent calls return the **cached result**.
+- **Simpler**: Unlike `sync.Once`, you don’t need to manually manage global variables or worry about explicitly setting them. `sync.OnceValue` automatically manages caching the return value from the function.
+- **Use Case**: Ideal when the function you are running once returns a value, and you want to **cache** and reuse that value for future calls.
+
+#### Example with `sync.OnceValue`:
+
+```go
+var initParserCached = sync.OnceValue(initParser)
+
+func Parse(dataToParse string) string {
+	parser := initParserCached()  // Automatically returns cached result after the first call
+	return parser.Parse(dataToParse)
+}
+```
+
+**How It Works**:
+
+- The first time `initParserCached()` is called, it executes `initParser()` and caches the result.
+- On subsequent calls, it doesn’t run `initParser()` again. Instead, it returns the cached `parser` object.
+
+### Key Differences:
+
+| Feature               | `sync.Once`                                                                   | `sync.OnceValue`                                                                      |
+| --------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **Usage**             | Ensures a block of code runs once.                                            | Ensures a function runs once and caches its result.                                   |
+| **Return Value**      | Does not return a value; you manage the global variable manually.             | Caches and returns the result of the function automatically.                          |
+| **Manual Management** | You manually handle initialization and global variables.                      | Automatically handles caching and function execution.                                 |
+| **Best for**          | Code that needs to run once without a return value or more complex scenarios. | Code that returns a value once and reuses it for future calls.                        |
+| **Example Scenario**  | Delayed or lazy initialization where no result is returned.                   | Initialization of a parser or configuration object that returns a value to be reused. |
+
+### Summary:
+
+- **`sync.Once`**: Use this when you need to run some code once, but you have to manually manage any returned values or global variables.
+- **`sync.OnceValue`**: Use this when you need to **run a function once** and **cache** its return value for future use without manually managing the variable.
+
+In short, **`sync.OnceValue`** simplifies the process when you need to return and cache a result, while **`sync.Once`** provides more control but requires more manual handling of variables.
+
+### Conclusion:
+
+- **`sync.Once`** is great when you need to run initialization code only once, even in a multi-threaded environment.
+- **`sync.OnceValue`** (in Go 1.21+) simplifies the pattern further by caching the result of a function that should only run once.
+
+This is a useful concurrency pattern when dealing with lazy initialization or expensive setup processes in Go.
+
+---
+
+## Put Your Concurrent Tools Together
+
+### Combining Concurrent Tools in Go
+
+In this example, you need to call three web services with a **50-millisecond timeout**:
+
+1. Call services **A** and **B** in parallel.
+2. Use the results from services **A** and **B** as input for service **C**.
+3. Return the final result from service **C** or an error if the timeout is reached.
+
+We'll use **concurrency** to run these services in parallel, **channels** to communicate results, and **context** to handle the timeout.
+
+### Step-by-Step Implementation:
+
+#### Main Function (`GatherAndProcess`)
+
+This function sets up a context with a 50-millisecond timeout and calls the processors for services **A/B** and **C**.
+
+```go
+func GatherAndProcess(ctx context.Context, data Input) (COut, error) {
+	// Set a 50ms timeout
+	ctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+
+	// Start processing A and B in parallel
+	ab := newABProcessor()
+	ab.start(ctx, data)
+
+	// Wait for both A and B to finish
+	inputC, err := ab.wait(ctx)
+	if err != nil {
+		return COut{}, err
+	}
+
+	// Start processing C with the results of A and B
+	c := newCProcessor()
+	c.start(ctx, inputC)
+
+	// Wait for C to finish
+	out, err := c.wait(ctx)
+	return out, err
+}
+```
+
+### `abProcessor` for Services A and B
+
+The `abProcessor` handles the parallel processing of services **A** and **B**.
+
+#### `abProcessor` Structure
+
+- **Channels**:
+  - `outA`: Stores results from service **A**.
+  - `outB`: Stores results from service **B**.
+  - `errs`: Stores any errors from services **A** or **B**.
+
+```go
+type abProcessor struct {
+	outA chan aOut
+	outB chan bOut
+	errs chan error
+}
+
+func newABProcessor() *abProcessor {
+	return &abProcessor{
+		outA: make(chan aOut, 1),
+		outB: make(chan bOut, 1),
+		errs: make(chan error, 2), // Two errors possible, from A and B
+	}
+}
+```
+
+#### Starting the Processor
+
+- **Two Goroutines**: Each calls service **A** and **B** in parallel. If an error occurs, it sends it to the `errs` channel. If successful, it sends the result to `outA` or `outB`.
+
+```go
+func (p *abProcessor) start(ctx context.Context, data Input) {
+	go func() {
+		aOut, err := getResultA(ctx, data.A)
+		if err != nil {
+			p.errs <- err
+			return
+		}
+		p.outA <- aOut
+	}()
+
+	go func() {
+		bOut, err := getResultB(ctx, data.B)
+		if err != nil {
+			p.errs <- err
+			return
+		}
+		p.outB <- bOut
+	}()
+}
+```
+
+#### Waiting for Results
+
+- **For Loop**: Waits for both **A** and **B** to complete using a `select` statement.
+- **Error Handling**: If an error occurs, it is returned immediately. If both results are received successfully, they are stored in `cIn` and returned.
+
+```go
+func (p *abProcessor) wait(ctx context.Context) (cIn, error) {
+	var cData cIn
+	for count := 0; count < 2; count++ {
+		select {
+		case a := <-p.outA:
+			cData.a = a
+		case b := <-p.outB:
+			cData.b = b
+		case err := <-p.errs:
+			return cIn{}, err
+		case <-ctx.Done():
+			return cIn{}, ctx.Err() // Timeout or cancellation
+		}
+	}
+	return cData, nil
+}
+```
+
+### `cProcessor` for Service C
+
+The `cProcessor` processes the combined results from **A** and **B** in service **C**.
+
+#### `cProcessor` Structure
+
+- **Channels**:
+  - `outC`: Stores results from service **C**.
+  - `errs`: Stores any errors from service **C**.
+
+```go
+type cProcessor struct {
+	outC chan COut
+	errs chan error
+}
+
+func newCProcessor() *cProcessor {
+	return &cProcessor{
+		outC: make(chan COut, 1),
+		errs: make(chan error, 1),
+	}
+}
+```
+
+#### Starting the Processor
+
+- **Goroutine**: Calls service **C** with input from services **A** and **B**. Sends errors to `errs` or results to `outC`.
+
+```go
+func (p *cProcessor) start(ctx context.Context, inputC cIn) {
+	go func() {
+		cOut, err := getResultC(ctx, inputC)
+		if err != nil {
+			p.errs <- err
+			return
+		}
+		p.outC <- cOut
+	}()
+}
+```
+
+#### Waiting for Results
+
+- **Select Statement**: Waits for either the result from **C**, an error, or a timeout.
+
+```go
+func (p *cProcessor) wait(ctx context.Context) (COut, error) {
+	select {
+	case out := <-p.outC:
+		return out, nil
+	case err := <-p.errs:
+		return COut{}, err
+	case <-ctx.Done():
+		return COut{}, ctx.Err() // Timeout
+	}
+}
+```
+
+### Key Concepts:
+
+- **Goroutines**: Used to call services **A**, **B**, and **C** concurrently.
+- **Channels**: Used to communicate results and errors between the goroutines.
+- **Context with Timeout**: Ensures that the entire process finishes within 50 milliseconds, or it returns an error.
+
+### Summary of Steps:
+
+1. **Services A and B** are called in parallel using `abProcessor`.
+2. **Wait for A and B**: Collect results from services **A** and **B** using a `select` loop with context cancellation.
+3. **Service C** is called with the combined results of **A** and **B**.
+4. **Wait for C**: Return the result of service **C** or an error if a timeout occurs.
+
+This structure makes the code clean, concurrent, and handles timeouts effectively. By using goroutines, channels, and context, you separate the different steps of the pipeline and ensure efficient, non-blocking communication.
