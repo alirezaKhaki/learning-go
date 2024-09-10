@@ -65,7 +65,7 @@ While arrays are a fundamental data structure in Go, their limitations often mak
 
 ---
 
-**Slices in Go**
+## Slices in Go
 
 Slices are dynamic arrays in Go, providing flexibility in handling sequences of elements. Unlike arrays, slices do not have a fixed size, allowing them to grow or shrink as needed.
 
