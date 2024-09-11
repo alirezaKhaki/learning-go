@@ -1,41 +1,70 @@
 package main
 
-import (
-	"fmt"
-	"sync"
+import "fmt"
 
-)
-
-type SlowParser interface {
-	Parse(string) string
+// Define the ListNode structure
+type ListNode struct {
+	Val  int
+	Next *ListNode
 }
 
-// Simulate slow parser setup
-func initParser() SlowParser {
-	fmt.Println("Initializing parser...")
-	return &MyParser{}
+// Function to merge two sorted linked lists
+func mergeTwoLists(l1 *ListNode, l2 *ListNode) *ListNode {
+	// Create a dummy node to serve as the start of the merged list
+	dummy := &ListNode{}
+	current := dummy
+
+	for l1 != nil && l2 != nil {
+		if l1.Val <= l2.Val {
+			current = l1
+			l1 = l1.Next
+		} else {
+			current = l2
+			l2 = l2.Next
+		}
+
+		current = current.Next
+	}
+
+	// If either list still has nodes, append them to the merged list
+	if l1 != nil {
+		current.Next = l1
+	} else if l2 != nil {
+		current.Next = l2
+	}
+
+	return dummy.Next
 }
 
-type MyParser struct{}
-
-func (p *MyParser) Parse(input string) string {
-	return "Parsed: " + input
-}
-
-// Global variables to keep track of the parser and sync.Once
-var parser SlowParser
-var once sync.Once
-
-// Parse function that makes sure the parser is only initialized once
-func Parse(dataToParse string) string {
-	once.Do(func() {
-		parser = initParser() // This code runs only once
-	})
-	return parser.Parse(dataToParse)
+// Helper function to print the linked list
+func printList(head *ListNode) {
+	current := head
+	for current != nil {
+		fmt.Printf("%d -> ", current.Val)
+		current = current.Next
+	}
+	fmt.Println("nil")
 }
 
 func main() {
-	// Even though Parse is called twice, the parser is initialized only once
-	fmt.Println(Parse("data1"))
-	fmt.Println(Parse("data2"))
+	// Create first sorted linked list: 1 -> 2 -> 4
+	l1 := &ListNode{Val: 1}
+	l1.Next = &ListNode{Val: 2}
+	l1.Next.Next = &ListNode{Val: 4}
+
+	// Create second sorted linked list: 1 -> 3 -> 4
+	l2 := &ListNode{Val: 1}
+	l2.Next = &ListNode{Val: 3}
+	l2.Next.Next = &ListNode{Val: 4}
+
+	fmt.Println("List 1:")
+	printList(l1)
+	fmt.Println("List 2:")
+	printList(l2)
+
+	// Merge the two sorted linked lists
+	mergedList := mergeTwoLists(l1, l2)
+
+	fmt.Println("Merged List:")
+	printList(mergedList)
 }
