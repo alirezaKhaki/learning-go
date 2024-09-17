@@ -652,3 +652,72 @@ By following these guidelines, you can effectively run tests concurrently in Go 
 
 ---
 
+## Checking Your Code Coverage
+
+### Checking Code Coverage in Go
+
+Code coverage helps you identify which parts of your code are tested and which aren't. However, even with 100% code coverage, bugs can still exist. Here's a simplified explanation of how to check and interpret code coverage using Go.
+
+### Step-by-Step Guide
+
+1. **Running Tests with Code Coverage**
+   To calculate code coverage while running your tests, use the `-cover` flag:
+
+   ```bash
+   go test -v -cover
+   ```
+
+   This command runs the tests and displays a summary of the code coverage (e.g., 87.5%).
+
+2. **Saving Coverage Data to a File**
+   You can save the coverage data to a file using the `-coverprofile` flag:
+
+   ```bash
+   go test -v -cover -coverprofile=c.out
+   ```
+
+   This creates a file (`c.out`) with the coverage data.
+
+3. **Viewing Code Coverage in HTML**
+   To visualize which lines are covered, use the `cover` tool to generate an HTML report:
+
+   ```bash
+   go tool cover -html=c.out
+   ```
+
+   This opens a web page in your browser that highlights the code:
+
+   - **Green**: Covered by tests.
+   - **Red**: Not covered by tests.
+   - **Gray**: Not testable (e.g., comments or package declarations).
+
+4. **Improving Coverage**
+   After seeing uncovered lines, you can add additional test cases. For example, if a bad operator isn't covered, you can add this case:
+
+   ```go
+   {"bad_op", 2, 2, "?", 0, `unknown operator ?`},
+   ```
+
+   After rerunning the tests and viewing the updated coverage, you'll notice improved coverage.
+
+5. **Identifying Bugs Despite 100% Coverage**
+   Even with full coverage, bugs can still exist. For instance, a multiplication operation might be wrong:
+   ```go
+   {"another_mult", 2, 3, "*", 6, ""},
+   ```
+   If you get an unexpected result, like:
+   ```
+   Expected 6, got 5
+   ```
+   It means there's a logic bug (e.g., mistakenly adding instead of multiplying).
+
+### Key Takeaways
+
+- **Code coverage is a useful metric**, but it **does not guarantee bug-free code**. It's possible to have 100% coverage and still miss edge cases or logical errors.
+- Make sure to review the logic and functionality in addition to ensuring high coverage.
+
+By using coverage tools in Go, you can ensure that most of your code is tested while being mindful that thorough tests and logic validation are also essential.
+
+---
+
+## Fuzzing
