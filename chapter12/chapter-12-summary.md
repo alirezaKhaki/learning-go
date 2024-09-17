@@ -2234,3 +2234,394 @@ func (p *cProcessor) wait(ctx context.Context) (COut, error) {
 4. **Wait for C**: Return the result of service **C** or an error if a timeout occurs.
 
 This structure makes the code clean, concurrent, and handles timeouts effectively. By using goroutines, channels, and context, you separate the different steps of the pipeline and ensure efficient, non-blocking communication.
+
+---
+
+## When to Use Mutexes Instead of Channels
+
+### When to Use Mutexes Instead of Channels in Go
+
+Go promotes the use of **channels** for concurrency, but sometimes **mutexes** are a better choice. Here's a simplified guide on when to use **mutexes** over channels.
+
+### Why Channels Are Often Preferred
+
+- **Data Flow**: Channels make the flow of data explicit and easier to follow. Only one goroutine at a time owns the data, so access is localized.
+- **Go Philosophy**: The Go community favors the principle: "Share memory by communicating, don't communicate by sharing memory."
+
+However, **mutexes** can sometimes be clearer or more efficient, especially when **reading** or **writing** to shared data without needing to process or transform the data in multiple goroutines.
+
+### When to Use Mutexes
+
+1. **Shared Access to Data**: When multiple goroutines need to read or write a **shared value**, but they don’t need to process or modify the data through channels.
+2. **Critical Sections**: Mutexes are good for limiting access to a **critical section** where multiple goroutines are reading or writing the same piece of data.
+3. **Performance**: In cases where channels add unnecessary complexity or overhead, mutexes can be more efficient.
+
+### Example: Using Channels for a Shared Scoreboard
+
+Here's an example of using channels to manage a shared scoreboard. While this works, it’s more complex for simple read/write operations.
+
+```go
+func scoreboardManager(ctx context.Context, in <-chan func(map[string]int)) {
+	scoreboard := map[string]int{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case f := <-in:
+			f(scoreboard) // Modify or read from the map via the passed-in function
+		}
+	}
+}
+
+type ChannelScoreboardManager chan func(map[string]int)
+
+func NewChannelScoreboardManager(ctx context.Context) ChannelScoreboardManager {
+	ch := make(ChannelScoreboardManager)
+	go scoreboardManager(ctx, ch)
+	return ch
+}
+
+func (csm ChannelScoreboardManager) Update(name string, val int) {
+	csm <- func(m map[string]int) {
+		m[name] = val // Update the score
+	}
+}
+
+func (csm ChannelScoreboardManager) Read(name string) (int, bool) {
+	resultCh := make(chan struct {
+		out int
+		ok  bool
+	})
+	csm <- func(m map[string]int) {
+		out, ok := m[name]
+		resultCh <- struct{ out int; ok bool }{out, ok}
+	}
+	result := <-resultCh
+	return result.out, result.ok
+}
+```
+
+#### Issues with Channels for Simple Access:
+
+- **Complexity**: Reading and writing data requires sending functions through a channel, which adds complexity.
+- **Single Reader**: Only one goroutine can access the data at a time, making reads and writes less efficient.
+
+### Using Mutexes for Simple Shared Data
+
+When multiple goroutines need **shared access** to a value, but you're not processing it in stages (like with channels), a **mutex** is clearer and simpler.
+
+```go
+type MutexScoreboardManager struct {
+	mu        sync.RWMutex
+	scoreboard map[string]int
+}
+
+func NewMutexScoreboardManager() *MutexScoreboardManager {
+	return &MutexScoreboardManager{
+		scoreboard: map[string]int{},
+	}
+}
+
+// Update modifies the shared scoreboard
+func (msm *MutexScoreboardManager) Update(name string, val int) {
+	msm.mu.Lock() // Acquire a write lock
+	defer msm.mu.Unlock()
+	msm.scoreboard[name] = val
+}
+
+// Read retrieves a value from the scoreboard
+func (msm *MutexScoreboardManager) Read(name string) (int, bool) {
+	msm.mu.RLock() // Acquire a read lock
+	defer msm.mu.RUnlock()
+	val, ok := msm.scoreboard[name]
+	return val, ok
+}
+```
+
+### Benefits of Mutexes:
+
+- **Simplicity**: It’s more straightforward to use a mutex when you just need to **read/write shared data**.
+- **Efficiency**: `sync.RWMutex` allows multiple goroutines to read simultaneously but restricts writes to one goroutine at a time.
+- **Less Overhead**: For simple reads and writes, mutexes avoid the overhead and complexity of using channels.
+
+### When to Choose Channels:
+
+- **Data Processing**: When you need to process or transform data through multiple stages in different goroutines.
+- **Coordination**: If your goroutines need to **coordinate actions** based on data being passed between them, channels are more natural and explicit.
+
+### When to Choose Mutexes:
+
+- **Simple Reads/Writes**: When multiple goroutines need to access or modify shared data, and you're not processing that data in stages.
+- **Performance Issues**: If channels introduce performance bottlenecks, consider switching to mutexes, especially when the data access pattern is simple.
+
+### Summary:
+
+- **Channels** are ideal when you need to coordinate goroutines or pass data between them.
+- **Mutexes** are simpler and more efficient when multiple goroutines need shared access to a single resource, and no complex data processing is involved.
+- **Use channels for complex workflows** and **mutexes for simple data protection**.
+
+By making the right choice between channels and mutexes, you can keep your code clean, efficient, and easy to maintain.
+
+---
+
+## Atomics—You Probably Don’t Need These
+
+### Atomics in Go — You Probably Don’t Need These
+
+Go provides a **low-level** way to handle concurrency using the **`sync/atomic`** package, which allows direct manipulation of atomic operations. This includes operations like:
+
+- **Add**: Atomically adding to a value.
+- **Swap**: Atomically swapping values.
+- **Load**: Atomically loading a value.
+- **Store**: Atomically storing a value.
+- **CAS (Compare And Swap)**: A special operation that checks if a value matches an expected one and swaps it atomically if it does.
+
+These operations are performed directly on memory and use the atomic operations built into modern CPUs to manage concurrency efficiently.
+
+### Why You _Probably_ Don’t Need Atomics
+
+While **atomics** are extremely fast and efficient, they come with some trade-offs:
+
+1. **Complexity**: Writing correct concurrent code with atomics is difficult and error-prone. Unlike channels or mutexes, atomics don’t express **data flow** clearly, which can make the code harder to reason about.
+2. **Readability**: Atomics obscure the intent of your code, and it becomes challenging for others (or even you in the future) to understand what’s happening.
+3. **No High-Level Guarantees**: Atomics ensure only that individual operations are safe, but they don’t guarantee safety for more complex sequences of operations. For more complex synchronization needs, mutexes or channels are safer and easier to use.
+
+### When to Use Atomics
+
+Atomics are useful only in **highly performance-sensitive scenarios** where you want to avoid the overhead of mutexes and are managing very basic values (like integers or pointers). If you're an expert in concurrent programming, atomics give you **fine-grained control** over synchronization.
+
+### Example of Using Atomics
+
+Here’s an example of using **`sync/atomic`** to increment a counter atomically:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+func main() {
+	var counter int64
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+
+	// Increment counter concurrently using atomic
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			atomic.AddInt64(&counter, 1)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			atomic.AddInt64(&counter, 1)
+		}
+	}()
+
+	wg.Wait()
+	fmt.Println("Final Counter:", counter) // Output: 2000
+}
+```
+
+### Explanation:
+
+- **`atomic.AddInt64`** ensures that the increment operation is safe across multiple goroutines, without the need for a mutex.
+- This works well for very simple operations like counting, but if you need to do more complex reads/writes or data manipulations, atomics can become risky and hard to manage.
+
+### Conclusion
+
+For most use cases, **goroutines** and **mutexes** are sufficient for handling concurrency in Go, and they are much safer and easier to use. **Atomics** should be reserved for very performance-critical cases where the overhead of mutexes is too high, and only if you have a deep understanding of concurrent programming.
+
+In general, if you’re not sure whether to use atomics, you probably shouldn’t! Stick to **mutexes** and **channels** for simplicity and safety.
+
+---
+
+## Exercises
+
+### Exercise 1: Three Goroutines with Channels
+
+Create a function that launches three goroutines:
+
+- The first two goroutines each write 10 numbers to the same channel.
+- The third goroutine reads from the channel and prints the numbers.
+- Ensure that no goroutines leak, and the program exits when all values are printed.
+
+#### Solution:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	ch := make(chan int)
+	var wg sync.WaitGroup
+
+	// First two goroutines write to the channel
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= 10; i++ {
+			ch <- i
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 11; i <= 20; i++ {
+			ch <- i
+		}
+	}()
+
+	// Third goroutine reads from the channel and prints the values
+	go func() {
+		wg.Wait() // Wait for the writing goroutines to finish
+		close(ch) // Close the channel after writing is done
+	}()
+
+	for num := range ch {
+		fmt.Println("Received:", num)
+	}
+}
+```
+
+#### Explanation:
+
+- Two goroutines write numbers to the channel.
+- The third goroutine waits for the writers to finish and then closes the channel.
+- The main goroutine reads from the channel and prints the values.
+
+---
+
+### Exercise 2: Two Goroutines with Two Channels and a Select Statement
+
+Create a function that:
+
+- Launches two goroutines, each writing 10 numbers to its own channel.
+- Uses a `for-select` loop to read from both channels and prints the number and the goroutine that wrote it.
+- Ensures that the function exits after all values are read and no goroutines leak.
+
+#### Solution:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	ch1 := make(chan int)
+	ch2 := make(chan int)
+	var wg sync.WaitGroup
+
+	// First goroutine writes to ch1
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= 10; i++ {
+			ch1 <- i
+		}
+		close(ch1)
+	}()
+
+	// Second goroutine writes to ch2
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 11; i <= 20; i++ {
+			ch2 <- i
+		}
+		close(ch2)
+	}()
+
+	// Read from both channels using select
+	go func() {
+		wg.Wait()
+		close(ch1) // Ensure both channels are closed
+		close(ch2)
+	}()
+
+	for {
+		select {
+		case v, ok := <-ch1:
+			if ok {
+				fmt.Println("Goroutine 1 wrote:", v)
+			} else {
+				ch1 = nil
+			}
+		case v, ok := <-ch2:
+			if ok {
+				fmt.Println("Goroutine 2 wrote:", v)
+			} else {
+				ch2 = nil
+			}
+		}
+		if ch1 == nil && ch2 == nil {
+			break
+		}
+	}
+}
+```
+
+#### Explanation:
+
+- Two goroutines write to separate channels.
+- A `for-select` loop reads from both channels until all values are read.
+- The program exits cleanly, and no goroutines leak.
+
+---
+
+### Exercise 3: Generating and Caching Square Roots with `sync.OnceValue`
+
+Create a function that builds a map of the square roots of numbers from 0 to 100,000. Use `sync.OnceValue` to cache the map, and look up square roots for every 1,000th number.
+
+#### Solution:
+
+```go
+package main
+
+import (
+	"fmt"
+	"math"
+	"sync"
+)
+
+func generateSqrtMap() map[int]float64 {
+	sqrtMap := make(map[int]float64)
+	for i := 0; i < 100000; i++ {
+		sqrtMap[i] = math.Sqrt(float64(i))
+	}
+	return sqrtMap
+}
+
+var onceSqrtMap = sync.OnceValue(generateSqrtMap)
+
+func main() {
+	// Access every 1,000th square root
+	for i := 0; i < 100000; i += 1000 {
+		sqrtMap := onceSqrtMap() // Retrieve the cached map
+		fmt.Printf("Sqrt(%d) = %f\n", i, sqrtMap[i])
+	}
+}
+```
+
+#### Explanation:
+
+- `generateSqrtMap` creates a map with square roots of numbers from 0 to 100,000.
+- `sync.OnceValue` ensures that the map is generated only once and cached for future lookups.
+- The main function prints the square roots for every 1,000th number.
+
+---
+
+These exercises help solidify your understanding of Go's concurrency model, especially how to use goroutines, channels, and synchronization tools like `sync.OnceValue` and `sync.WaitGroup`.
